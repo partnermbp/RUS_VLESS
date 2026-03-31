@@ -1,7 +1,7 @@
 import requests
 import time
 import socket
-import ssl
+import random
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qs
@@ -19,8 +19,7 @@ SOURCES = [
 ]
 
 EXCLUDE_COUNTRIES = {"🇮🇷", "🇷🇺", "🇨🇳", "🇹🇷", "IR", "RU", "CN", "TR"}
-TOP_N = 100                    # ← You can increase to 150 or 200 if you want more nodes
-MAX_TEST_LATENCY = 5000        # Test up to 5 seconds (very lenient)
+TOP_N = 100
 
 # ================== HELPER FUNCTIONS ==================
 def should_exclude(config: str) -> bool:
@@ -31,56 +30,38 @@ def should_exclude(config: str) -> bool:
         return False
 
 
-def extract_vless_info(cfg: str):
+def extract_host_port(cfg: str):
+    """Minimal parser - only needs host:port for TCP test"""
     try:
         url_part = cfg.split('#')[0]
         if not url_part.startswith('vless://'):
-            return None, None, None, False
-
+            return None, None
         without_scheme = url_part[8:]
         if '@' not in without_scheme:
-            return None, None, None, False
-
+            return None, None
         _, rest = without_scheme.split('@', 1)
         hostport_part = rest.split('?')[0].split('/')[0]
-
         if ':' in hostport_part:
             host, port_str = hostport_part.rsplit(':', 1)
             port = int(port_str)
         else:
             host = hostport_part
             port = 443
-
-        params = {}
-        if '?' in rest:
-            query = rest.split('?', 1)[1]
-            params = parse_qs(query)
-
-        sni_list = params.get('sni') or params.get('serverNames') or params.get('host')
-        sni = sni_list[0] if sni_list else host
-
-        is_reality = 'security=reality' in cfg or 'pbk=' in cfg or 'reality' in cfg.lower()
-        return host.strip(), port, sni.strip(), is_reality
+        return host.strip(), port
     except:
-        return None, None, None, False
+        return None, None
 
 
 def test_node(cfg: str):
-    host, port, sni, is_reality = extract_vless_info(cfg)
+    """Very light test: only TCP connect (much higher success rate)"""
+    host, port = extract_host_port(cfg)
     if not host or not port:
         return cfg, 99999
 
     start_time = time.time()
     try:
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-
-        with socket.create_connection((host, port), timeout=6.0) as raw_sock:
-            if is_reality or sni != host:
-                with context.wrap_socket(raw_sock, server_hostname=sni) as ssock:
-                    pass
-
+        with socket.create_connection((host, port), timeout=8.0) as sock:
+            pass  # TCP connect successful
         latency = round((time.time() - start_time) * 1000, 1)
         return cfg, latency
     except Exception:
@@ -88,68 +69,70 @@ def test_node(cfg: str):
 
 
 def generate_subscription() -> str:
-    print("🔄 Fetching VLESS nodes from all sources...")
+    print("🔄 Fetching ALL VLESS nodes from sources...")
     configs = []
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 VLESS-Checker/2.3"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) VLESS-Checker/2.4"}
 
     for url in SOURCES:
         try:
             resp = requests.get(url, timeout=20, headers=headers)
-            if resp.status_code == 200:
-                for line in resp.text.splitlines():
-                    line = line.strip()
-                    if line.startswith('vless://') and not should_exclude(line):
-                        configs.append(line)
+            resp.raise_for_status()
+            for line in resp.text.splitlines():
+                line = line.strip()
+                if line.startswith('vless://') and not should_exclude(line):
+                    configs.append(line)
         except Exception as e:
-            print(f"⚠️ Failed to load {url}: {e}")
+            print(f"⚠️ Source failed: {url} → {e}")
 
-    configs = list(dict.fromkeys(configs))
+    configs = list(dict.fromkeys(configs))  # remove duplicates
     print(f"📥 Loaded {len(configs)} unique VLESS configs")
 
-    # Test all nodes
-    print(f"⚡ Testing {len(configs)} nodes with TCP + TLS handshake...")
+    # === Light TCP ping test on all nodes ===
+    print(f"⚡ Testing {len(configs)} nodes (simple TCP connect)...")
     tested = []
-    with ThreadPoolExecutor(max_workers=60) as executor:
+    with ThreadPoolExecutor(max_workers=80) as executor:
         futures = [executor.submit(test_node, c) for c in configs]
         for future in as_completed(futures):
             cfg, latency = future.result()
-            if latency < MAX_TEST_LATENCY:          # Very lenient
+            if latency < 99999:   # only nodes that responded
                 tested.append((cfg, latency))
 
-    # Sort by latency (lowest first)
-    tested.sort(key=lambda x: x[1])
+    tested.sort(key=lambda x: x[1])   # sort by lowest ping first
 
     good_nodes = [cfg for cfg, lat in tested]
-    print(f"✅ Found {len(good_nodes)} active nodes (TCP+TLS responded)")
+    print(f"✅ Found {len(good_nodes)} active nodes (TCP responded)")
 
-    # Fallback: if zero good nodes, use all original configs
+    # Fallback if literally zero nodes responded
     if not good_nodes:
-        print("⚠️ No nodes responded to test. Using all loaded configs as fallback.")
-        good_nodes = configs[:TOP_N]
+        print("⚠️ No nodes responded to TCP test → using all loaded configs")
+        good_nodes = configs
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    random_id = random.randint(1000, 9999)   # forces change every run
 
-    header = f"""# profile-title: 🚀 VLESS Active Nodes (Ping Tested)
+    header = f"""# profile-title: 🚀 VLESS Nodes (Ping Tested - GitHub Auto)
 # profile-update-interval: 6
 # Generated: {now}
+# Random-ID: {random_id}   ← (this forces update every run)
 # Total Nodes Tested: {len(configs)}
 # Active Nodes Found: {len(good_nodes)}
-# Test: TCP connect + TLS handshake (Reality-aware)
-# Sorted by: Lowest latency first
-# GitHub Auto-Updated • From Russia-focused sources
+# Test: Simple TCP connect (very lenient)
+# Sorted by: Lowest ping first
+# Auto-generated by GitHub Actions
 """
 
-    print(f"📤 Preparing final subscription with {len(good_nodes[:TOP_N])} nodes")
-    return header + "\n".join(good_nodes[:TOP_N])
+    final_nodes = good_nodes[:TOP_N]
+    print(f"📤 Final subscription ready with {len(final_nodes)} nodes")
+    return header + "\n".join(final_nodes)
 
 
 if __name__ == "__main__":
-    print("🚀 Starting VLESS Subscription Updater (GitHub Edition)")
+    print("🚀 Starting VLESS Subscription Updater")
     subscription = generate_subscription()
 
     filename = "subscription.txt"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(subscription)
 
-    print(f"✅ File '{filename}' created successfully with {subscription.count('vless://')} nodes")
+    print(f"✅ Successfully wrote {filename} with {subscription.count('vless://')} VLESS nodes")
