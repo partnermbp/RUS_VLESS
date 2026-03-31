@@ -9,6 +9,7 @@ import os
 
 # ============== SOURCES ==============
 SOURCES = [
+    "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/refs/heads/main/configs/vless.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -19,7 +20,7 @@ SOURCES = [
 ]
 
 EXCLUDE_COUNTRIES = {"🇮🇷", "🇷🇺", "🇨🇳", "🇹🇷", "IR", "RU", "CN", "TR"}
-TOP_N = 100                    # ← You can increase to 150 or 200 if you want more nodes
+TOP_N = 200                    # ← You can increase to 150 or 200 if you want more nodes
 MAX_TEST_LATENCY = 5000        # Test up to 5 seconds (very lenient)
 
 # ================== HELPER FUNCTIONS ==================
