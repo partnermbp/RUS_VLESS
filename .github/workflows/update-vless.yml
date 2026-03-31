@@ -2,11 +2,11 @@ name: Update VLESS Subscription
 
 on:
   schedule:
-    - cron: '0 */3 * * *'     # Every 6 hours
-  workflow_dispatch:          # Allow manual trigger
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write             # ← Critical: Give write permission
+  contents: write
 
 jobs:
   update:
@@ -16,8 +16,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}   # Explicit token
-          fetch-depth: 0                       # Needed for proper commit history
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}     # ← Important: ensures we are on the branch
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -35,13 +36,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
+          # Force Git to detect content changes properly
+          git config core.fileMode false
+          git config core.autocrlf input
+          
           if git diff --quiet subscription.txt; then
-            echo "No changes detected in subscription.txt"
+            echo "ℹ️ No content changes detected (very rare now)"
           else
             git add subscription.txt
-            git commit -m "Update subscription: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git commit -m "Update subscription: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
             git push
-            echo "✅ Subscription updated and pushed successfully"
+            echo "✅ Subscription successfully updated and pushed!"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
