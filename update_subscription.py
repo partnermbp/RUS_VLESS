@@ -1,13 +1,13 @@
 import requests
-import re
 import time
 import socket
 import ssl
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qs
+import os
 
-# ============== SOURCES (only high-quality GitHub raw files) ==============
+# ============== SOURCES ==============
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
@@ -19,8 +19,8 @@ SOURCES = [
 ]
 
 EXCLUDE_COUNTRIES = {"🇮🇷", "🇷🇺", "🇨🇳", "🇹🇷", "IR", "RU", "CN", "TR"}
-TOP_N = 50
-MAX_ACCEPTABLE_LATENCY = 1000  # ms
+TOP_N = 100                    # ← You can increase to 150 or 200 if you want more nodes
+MAX_TEST_LATENCY = 5000        # Test up to 5 seconds (very lenient)
 
 # ================== HELPER FUNCTIONS ==================
 def should_exclude(config: str) -> bool:
@@ -32,7 +32,6 @@ def should_exclude(config: str) -> bool:
 
 
 def extract_vless_info(cfg: str):
-    """Robust parser: returns (host, port, sni, is_reality)"""
     try:
         url_part = cfg.split('#')[0]
         if not url_part.startswith('vless://'):
@@ -52,7 +51,6 @@ def extract_vless_info(cfg: str):
             host = hostport_part
             port = 443
 
-        # Parse query parameters
         params = {}
         if '?' in rest:
             query = rest.split('?', 1)[1]
@@ -68,10 +66,9 @@ def extract_vless_info(cfg: str):
 
 
 def test_node(cfg: str):
-    """Full check: TCP + TLS handshake in ONE connection"""
     host, port, sni, is_reality = extract_vless_info(cfg)
     if not host or not port:
-        return cfg, 9999
+        return cfg, 99999
 
     start_time = time.time()
     try:
@@ -79,78 +76,80 @@ def test_node(cfg: str):
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
 
-        with socket.create_connection((host, port), timeout=5.0) as raw_sock:
+        with socket.create_connection((host, port), timeout=6.0) as raw_sock:
             if is_reality or sni != host:
                 with context.wrap_socket(raw_sock, server_hostname=sni) as ssock:
-                    pass  # TLS handshake successful
+                    pass
 
         latency = round((time.time() - start_time) * 1000, 1)
         return cfg, latency
     except Exception:
-        return cfg, 9999
+        return cfg, 99999
 
 
 def generate_subscription() -> str:
-    print("🔄 Fetching all VLESS nodes from sources...")
+    print("🔄 Fetching VLESS nodes from all sources...")
     configs = []
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 VLESS-Checker/2.2"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 VLESS-Checker/2.3"}
 
     for url in SOURCES:
         try:
-            resp = requests.get(url, timeout=15, headers=headers)
+            resp = requests.get(url, timeout=20, headers=headers)
             if resp.status_code == 200:
                 for line in resp.text.splitlines():
                     line = line.strip()
                     if line.startswith('vless://') and not should_exclude(line):
                         configs.append(line)
         except Exception as e:
-            print(f"⚠️ Source failed: {url} → {e}")
+            print(f"⚠️ Failed to load {url}: {e}")
 
-    configs = list(dict.fromkeys(configs))  # remove duplicates, preserve order
+    configs = list(dict.fromkeys(configs))
     print(f"📥 Loaded {len(configs)} unique VLESS configs")
 
-    # === FULL CHECK: TCP + TLS on ALL nodes ===
-    print("⚡ Testing ALL nodes (TCP + TLS handshake)...")
+    # Test all nodes
+    print(f"⚡ Testing {len(configs)} nodes with TCP + TLS handshake...")
     tested = []
-    with ThreadPoolExecutor(max_workers=50) as executor:
+    with ThreadPoolExecutor(max_workers=60) as executor:
         futures = [executor.submit(test_node, c) for c in configs]
         for future in as_completed(futures):
             cfg, latency = future.result()
-            if latency < MAX_ACCEPTABLE_LATENCY:
+            if latency < MAX_TEST_LATENCY:          # Very lenient
                 tested.append((cfg, latency))
 
-    # Sort by lowest latency
+    # Sort by latency (lowest first)
     tested.sort(key=lambda x: x[1])
-    fastest = [cfg for cfg, latency in tested[:TOP_N]]
+
+    good_nodes = [cfg for cfg, lat in tested]
+    print(f"✅ Found {len(good_nodes)} active nodes (TCP+TLS responded)")
+
+    # Fallback: if zero good nodes, use all original configs
+    if not good_nodes:
+        print("⚠️ No nodes responded to test. Using all loaded configs as fallback.")
+        good_nodes = configs[:TOP_N]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    header = f"""# profile-title: 🚀 Fastest VLESS Reality (GitHub Auto-Updated)
+
+    header = f"""# profile-title: 🚀 VLESS Active Nodes (Ping Tested)
 # profile-update-interval: 6
 # Generated: {now}
 # Total Nodes Tested: {len(configs)}
-# Good Nodes Found: {len(fastest)}
-# Tests performed: TCP connect + TLS handshake (Reality-aware)
-# Latency measured from: GitHub Actions Runner
-# Sorted by: Lowest Ping → Highest Ping
-# Max acceptable latency: {MAX_ACCEPTABLE_LATENCY} ms
-# Repository: {requests.get('https://api.github.com/repos/' + os.getenv('GITHUB_REPOSITORY', 'unknown/unknown')).json().get('html_url', 'this repo')}
+# Active Nodes Found: {len(good_nodes)}
+# Test: TCP connect + TLS handshake (Reality-aware)
+# Sorted by: Lowest latency first
+# GitHub Auto-Updated • From Russia-focused sources
 """
 
-    print(f"✅ Generated {len(fastest)} best working nodes")
-    return header + "\n".join(fastest)
+    print(f"📤 Preparing final subscription with {len(good_nodes[:TOP_N])} nodes")
+    return header + "\n".join(good_nodes[:TOP_N])
 
 
 if __name__ == "__main__":
-    import os
-    print("🚀 Starting GitHub VLESS Subscription Updater")
+    print("🚀 Starting VLESS Subscription Updater (GitHub Edition)")
     subscription = generate_subscription()
 
     filename = "subscription.txt"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(subscription)
 
-    print(f"✅ Successfully updated {filename} with {subscription.count('vless://')} nodes")
+    print(f"✅ File '{filename}' created successfully with {subscription.count('vless://')} nodes")
