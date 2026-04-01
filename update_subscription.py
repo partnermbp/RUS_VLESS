@@ -20,7 +20,7 @@ SOURCES = [
 ]
 
 EXCLUDE_COUNTRIES = {"🇮🇷", "🇷🇺", "🇨🇳", "🇹🇷", "IR", "RU", "CN", "TR"}
-TOP_N = 200
+TOP_N = 500
 MAX_TEST_LATENCY = 10000
 
 # ================== HELPER FUNCTIONS ==================
