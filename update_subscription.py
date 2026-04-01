@@ -5,11 +5,11 @@ import ssl
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qs
-import base64   # added for SS base64 support
+import base64
 
 # ============== SOURCES ==============
 SOURCES = [
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/8.txt#8",
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/8.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -33,12 +33,9 @@ def should_exclude(config: str) -> bool:
 
 def detect_protocol(cfg: str) -> str:
     cfg = cfg.strip().lower()
-    if cfg.startswith('vless://'):
-        return 'vless'
-    elif cfg.startswith('trojan://'):
-        return 'trojan'
-    elif cfg.startswith('ss://'):
-        return 'ss'
+    if cfg.startswith('vless://'): return 'vless'
+    elif cfg.startswith('trojan://'): return 'trojan'
+    elif cfg.startswith('ss://'): return 'ss'
     return 'unknown'
 
 def extract_vless_info(cfg: str):
@@ -68,7 +65,6 @@ def extract_vless_info(cfg: str):
     except:
         return None, None, None, False
 
-# Minimal Trojan extractor (very similar style to your VLESS)
 def extract_trojan_info(cfg: str):
     try:
         url_part = cfg.split('#')[0]
@@ -96,7 +92,6 @@ def extract_trojan_info(cfg: str):
     except:
         return None, None, None
 
-# Minimal Shadowsocks extractor
 def extract_ss_info(cfg: str):
     try:
         if not cfg.startswith('ss://'):
@@ -105,7 +100,6 @@ def extract_ss_info(cfg: str):
         if '@' in part:
             _, hostport = part.split('@', 1)
         else:
-            # Try base64 decode
             try:
                 decoded = base64.urlsafe_b64decode(part + '===').decode('utf-8')
                 _, hostport = decoded.split('@', 1)
@@ -125,7 +119,6 @@ def test_node(cfg: str):
             host, port, sni, is_reality = extract_vless_info(cfg)
             if not host or not port:
                 return cfg, 99999
-            # Your original VLESS test logic
             start_time = time.time()
             context = ssl.create_default_context()
             context.check_hostname = False
@@ -141,7 +134,6 @@ def test_node(cfg: str):
             host, port, sni = extract_trojan_info(cfg)
             if not host or not port:
                 return cfg, 99999
-            # Trojan uses TLS like VLESS (non-Reality)
             start_time = time.time()
             context = ssl.create_default_context()
             context.check_hostname = False
@@ -156,7 +148,6 @@ def test_node(cfg: str):
             host, port = extract_ss_info(cfg)
             if not host or not port:
                 return cfg, 99999
-            # SS usually plain TCP (no TLS)
             start_time = time.time()
             with socket.create_connection((host, port), timeout=6.0) as raw_sock:
                 pass
@@ -166,7 +157,7 @@ def test_node(cfg: str):
         return cfg, 99999
 
 def generate_subscription() -> str:
-    print("🔄 Fetching VLESS + Trojan + Shadowsocks nodes from all sources...")
+    print("🔄 Fetching VLESS, Trojan and Shadowsocks nodes from all sources...")
     configs = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 VLESS-Checker/2.3"}
     for url in SOURCES:
@@ -182,7 +173,7 @@ def generate_subscription() -> str:
             print(f"⚠️ Failed to load {url}: {e}")
 
     configs = list(dict.fromkeys(configs))
-    print(f"📥 Loaded {len(configs)} unique configs")
+    print(f"📥 Loaded {len(configs)} unique configs (VLESS + Trojan + SS)")
 
     # Test all nodes
     print(f"⚡ Testing {len(configs)} nodes with TCP + TLS handshake...")
@@ -194,36 +185,40 @@ def generate_subscription() -> str:
             if latency < MAX_TEST_LATENCY:
                 tested.append((cfg, latency))
 
+    # Sort by latency (lowest first) - All protocols mixed together
     tested.sort(key=lambda x: x[1])
     good_nodes = [cfg for cfg, lat in tested]
     print(f"✅ Found {len(good_nodes)} active nodes (TCP+TLS responded)")
 
+    # Fallback
     if not good_nodes:
         print("⚠️ No nodes responded to test. Using all loaded configs as fallback.")
         good_nodes = configs[:TOP_N]
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    header = f"""# profile-title: 🚀 Mixed VLESS + Trojan + Shadowsocks (Ping Tested)
+    header = f"""# profile-title: 🚀 Mixed VLESS + Trojan + Shadowsocks Active Nodes (Ping Tested)
 # profile-update-interval: 6
 # Generated: {now}
 # Total Nodes Tested: {len(configs)}
 # Active Nodes Found: {len(good_nodes)}
 # Test: TCP connect + TLS handshake (Reality-aware)
 # Sorted by: Lowest latency first
-# GitHub Auto-Updated • Mixed Protocols
+# All protocols mixed & sorted by speed
+# GitHub Auto-Updated
 """
 
-    print(f"📤 Preparing final subscription with {len(good_nodes[:TOP_N])} nodes")
+    print(f"📤 Preparing final subscription with {len(good_nodes[:TOP_N])} fastest nodes")
     return header + "\n".join(good_nodes[:TOP_N])
 
 if __name__ == "__main__":
     print("🚀 Starting Mixed Subscription Updater")
     subscription = generate_subscription()
-    filename = "mixed_subscription.txt"
+    filename = "subscription.txt"          # ← Same file as your original request
     with open(filename, "w", encoding="utf-8") as f:
         f.write(subscription)
 
     vless_count = subscription.count('vless://')
     trojan_count = subscription.count('trojan://')
     ss_count = subscription.count('ss://')
-    print(f"✅ File '{filename}' created successfully with {vless_count} VLESS + {trojan_count} Trojan + {ss_count} Shadowsocks nodes")
+    print(f"✅ File 'subscription.txt' created successfully!")
+    print(f"   Total nodes: {vless_count + trojan_count + ss_count} ({vless_count} VLESS + {trojan_count} Trojan + {ss_count} Shadowsocks)")
